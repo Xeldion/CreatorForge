@@ -14,12 +14,13 @@ datasource db {
 // ============================================================================
 
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
-  avatar    String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   channels       Channel[]
   competitors    Competitor[]

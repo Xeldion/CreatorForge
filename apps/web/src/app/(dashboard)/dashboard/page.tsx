@@ -19,14 +19,23 @@ async function getChannelData(userId: string) {
   if (cached) return JSON.parse(cached as string);
 
   const yt = createYouTubeClient(account.refresh_token);
-  const stats = await yt.getMyChannel();
-  const videos = await yt.getRecentVideos(10);
+  let stats;
+  let videos: VideoData[] = [];
+
+  try {
+    stats = await yt.getMyChannel();
+    videos = await yt.getRecentVideos(10);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "";
+    if (message.includes("No YouTube channel")) {
+      return { noChannel: true };
+    }
+    throw err;
+  }
 
   const data = { stats, videos };
-
   await redis.set(cacheKey, JSON.stringify(data), "EX", 300);
 
-  // Background: sync to database
   await prisma.channel.upsert({
     where: { youtubeChannelId: stats.channelId },
     update: {
@@ -58,7 +67,7 @@ export default async function DashboardPage() {
   const userId = (session.user as { id: string }).id;
   const data = await getChannelData(userId);
 
-  // Not connected state
+  // Not connected state (no refresh token)
   if (!data) {
     return (
       <div className="flex flex-col items-center justify-center h-full max-w-md mx-auto text-center space-y-6">
@@ -93,6 +102,25 @@ export default async function DashboardPage() {
     );
   }
 
+  // No YouTube channel on this account
+  if ("noChannel" in data) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full max-w-md mx-auto text-center space-y-6">
+        <div className="rounded-full bg-amber-500/10 p-5">
+          <PlayCircle className="h-10 w-10 text-amber-500" />
+        </div>
+        <h2 className="text-2xl font-bold">No YouTube Channel Found</h2>
+        <p className="text-muted-foreground">
+          This Google account doesn&apos;t have a YouTube channel. Create one at{" "}
+          <a href="https://youtube.com/create_channel" className="text-brand-500 underline" target="_blank">
+            youtube.com/create_channel
+          </a>
+          {" "}or sign in with a different Google account that has a channel.
+        </p>
+      </div>
+    );
+  }
+
   const fmt = (n: number): string =>
     n >= 1_000_000
       ? `${(n / 1_000_000).toFixed(1)}M`
@@ -102,7 +130,6 @@ export default async function DashboardPage() {
 
   return (
     <div className="space-y-8 max-w-6xl">
-      {/* Header */}
       <div>
         <h1 className="text-3xl font-bold tracking-tight">
           {data.stats.channelName}
@@ -110,38 +137,17 @@ export default async function DashboardPage() {
         <p className="text-muted-foreground mt-1">Channel Overview</p>
       </div>
 
-      {/* Stats grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard
-          label="Subscribers"
-          value={fmt(data.stats.subscriberCount)}
-          icon={Users}
-          trend={{ value: "This session", positive: true }}
-        />
-        <StatCard
-          label="Total Views"
-          value={fmt(data.stats.totalViews)}
-          icon={BarChart3}
-        />
-        <StatCard
-          label="Total Videos"
-          value={fmt(data.stats.totalVideos)}
-          icon={Video}
-        />
-        <StatCard
-          label="Recent Videos"
-          value={String(data.videos.length)}
-          icon={PlayCircle}
-        />
+        <StatCard label="Subscribers" value={fmt(data.stats.subscriberCount)} icon={Users} trend={{ value: "This session", positive: true }} />
+        <StatCard label="Total Views" value={fmt(data.stats.totalViews)} icon={BarChart3} />
+        <StatCard label="Total Videos" value={fmt(data.stats.totalVideos)} icon={Video} />
+        <StatCard label="Recent Videos" value={String(data.videos.length)} icon={PlayCircle} />
       </div>
 
-      {/* Recent videos */}
       <section>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-semibold">Recent Videos</h2>
-          <span className="text-xs text-muted-foreground">
-            Cached · Updates every 5 minutes
-          </span>
+          <span className="text-xs text-muted-foreground">Cached · Updates every 5 minutes</span>
         </div>
         <div className="space-y-3">
           {data.videos.map((video: VideoData) => (
