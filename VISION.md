@@ -755,3 +755,398 @@ ASP = Average Selling Price (mix of Basic + Pro + Scale users)
 ---
 
 *This document is the master reference for CreatorForge. All implementation plans, feature specs, and design decisions should link back to sections in this document. When in doubt, re-read Section 1.*
+
+---
+
+## 18. Technical FAQ — How Everything Actually Works
+
+### 18.1 Why Cloudflare R2 for Thumbnail Images? What About Other Data?
+
+**Short answer:** Images are binary files. Databases store text and numbers. They don't mix well.
+
+**Detailed answer:**
+
+| Storage | What goes there | Why |
+|---------|----------------|-----|
+| **PostgreSQL** | User accounts, channel metadata, video titles/views/CTR, A/B test results, content gap analyses, competitor lists, subscription status, OAuth tokens (encrypted) | Structured text and numbers that need to be queried, filtered, joined, and sorted |
+| **Cloudflare R2 (or AWS S3)** | Thumbnail images (generated AI thumbnails, uploaded face references, channel avatars), generated PDF reports, exported data files | Binary blobs (100KB-2MB each) that are served to users as files, not queried as data |
+
+**Why not store images in PostgreSQL?**
+
+Storing images in PostgreSQL (as BLOB/BYTEA columns) is technically possible but a terrible idea:
+- A 1MB thumbnail stored in a database row makes every query that touches that table slower
+- Database backups become enormous (100,000 thumbnails × 1MB = 100GB backup)
+- Serving an image requires: web server → database → deserialize → stream to user (slow)
+- Serving from R2: CDN edge → user directly (fast, no server load)
+- PostgreSQL charges per GB of storage. R2 charges $0.015/GB with NO egress fees
+
+**The database stores REFERENCES to images, not the images themselves:**
+
+```
+PostgreSQL (thumbnails table):
+  id: "test_abc123"
+  variant_a_url: "https://cdn.creatorforge.com/thumbnails/user_42/variant_a_abc123.png"
+  variant_b_url: "https://cdn.creatorforge.com/thumbnails/user_42/variant_b_abc123.png"
+  ctr_a: 6.2
+  ctr_b: 8.1
+  winner: "variant_b"
+
+Cloudflare R2:
+  /thumbnails/user_42/variant_a_abc123.png   ← actual 1.2MB PNG file
+  /thumbnails/user_42/variant_b_abc123.png   ← actual 1.1MB PNG file
+```
+
+**What data lives in PostgreSQL (all of it):**
+
+Everything that isn't a file. User profiles, YouTube video metadata (title, views, CTR, retention, tags, publish date — cached from YouTube API), A/B test configurations and results, competitor channel lists, content gap analysis results (topic, search volume, opportunity score), AI-generated video ideas (titles, outlines, tags), brand preferences (colors, fonts), subscription state, OAuth refresh tokens (encrypted at rest).
+
+### 18.2 Are Phyllo / Outstand Free? How Does TikTok API Work?
+
+**Phyllo:** NOT free. Enterprise pricing, custom quote only. A 2026 review states: "Enterprise pricing (~$20K/year) with no true free tier." Phyllo is designed for funded startups and agencies building influencer marketing platforms at scale. It's overkill for Phase 1 and probably overkill for Phase 2 unless you have significant revenue. Phyllo handles: 20+ platforms, creator data normalization, OAuth flows, platform partnerships, compliance — but you pay enterprise rates for all of that.
+
+**Outstand:** NOT free. Usage-based pricing — you pay per API call / per post. "No fixed plans, no minimums" but you still pay. 500+ companies process 12.8 million posts/month through it. For a small app with 50 users, this could be $50-200/month depending on volume. More accessible than Phyllo but still not free.
+
+**For Phase 1 (YouTube only):** You don't need either. YouTube Data API v3 is free (10,000 units/day quota). YouTube Analytics API is free (1,000,000 units/day quota). Zero cost for API access.
+
+**For Phase 2 (multi-platform):** You have two paths:
+
+Path A — Direct platform APIs (more work, more control, cheaper):
+- YouTube: Already done, free
+- TikTok: Free for registered developers, requires app review (5-10 business days), OAuth per user, 10-50 calls/second rate limit
+- Instagram: Free tier via Facebook Graph API, requires Facebook Business verification + app review
+- X (Twitter): Limited free tier (1,500 tweets/month posting), Pro tier is $5,000/month — prohibitively expensive
+
+Path B — Unified API (less work, less control, costs money):
+- Evaluate Outstand or Ayrshare ($60/month starting) when you hit 100+ paying users
+- Until then, direct YouTube + TikTok APIs are sufficient and free
+
+**TikTok API specifics — can anyone use it?**
+
+Anyone can REGISTER as a TikTok developer. But getting approved for production access requires:
+1. Register at developers.tiktok.com with a clear app description
+2. Test in TikTok's sandbox environment
+3. Submit for App Review with a privacy policy and compliance documentation
+4. Wait 5-10 business days for approval
+5. Individual creators must OAuth-authorize your app to access THEIR account data
+6. You cannot pull data from creators who haven't authorized your app
+
+This is fundamentally different from YouTube: YouTube lets you query public video/channel data without the creator's permission (for public videos). TikTok requires per-creator OAuth for almost everything. This means:
+- Your competitor analysis feature CAN work on YouTube (public data)
+- Your competitor analysis feature CANNOT work on TikTok the same way — you'd need competitors to authorize your app, which they won't do
+- TikTok analytics in CreatorForge would be for the USER'S OWN account only, not competitor research
+
+This is a significant architectural difference. It's one more reason Phase 1 is YouTube-only — YouTube's API is genuinely more open and powerful for the use case.
+
+### 18.3 How Does the Content Gap Analyzer Work Technically?
+
+This is the core intelligence of the MVP. Here's the step-by-step technical flow:
+
+**Step 1: User inputs a niche**
+
+The user types "productivity for developers" or selects from a predefined category list. This becomes the search seed.
+
+**Step 2: Discover top channels in the niche**
+
+```
+YouTube Data API → search.list()
+  q: "productivity for developers"
+  type: "channel"
+  maxResults: 50
+  order: "relevance"
+
+Returns: 50 channel IDs with titles, descriptions, subscriber counts
+```
+
+We filter to channels with 1,000-500,000 subscribers (too small = no data, too large = not useful competitors).
+
+**Step 3: Fetch each channel's video catalog**
+
+```
+For each channel in top 20:
+  YouTube Data API → search.list()
+    channelId: channel.id
+    type: "video"
+    order: "date"
+    maxResults: 50 (most recent)
+    publishedAfter: (6 months ago)
+```
+
+This gives us up to 1,000 videos (20 channels × 50 videos) to analyze. It costs ~2,000 API units (100 per search call × 20 channels). Free quota is 10,000/day — we cache results aggressively.
+
+**Step 4: Extract topics from video titles**
+
+This is where the AI comes in. We send batches of video titles to GPT-4 (or use cheaper local NLP for cost savings):
+
+```
+Prompt to LLM:
+"Here are 50 video titles from a tech productivity YouTube channel.
+Categorize each into topics (e.g., 'coding tools', 'time management',
+'workspace setup', 'morning routine'). Return JSON:
+[{title: '...', topic: '...', format: 'tutorial|review|vlog|listicle'}]"
+
+LLM returns structured topic + format data for every video.
+```
+
+Alternatively, you can use keyword clustering (cheaper, no API cost):
+- Extract keywords from titles using TF-IDF or YAKE
+- Cluster similar keywords into topic groups
+- Count videos per topic per channel
+- This approach costs $0 but is less accurate than LLM classification
+
+**Step 5: Calculate topic saturation**
+
+```
+For each topic found across all channels:
+  topic.total_videos = sum of all videos on this topic
+  topic.avg_views = average views across those videos
+  topic.channel_count = how many channels cover this topic
+  topic.recent_uploads = videos in last 30 days
+  topic.saturation_score = (total_videos × 0.5) + (channel_count × 0.3) + (recent_uploads × 0.2)
+```
+
+High saturation = many channels, many videos = hard to compete
+Low saturation = few channels, few videos = opportunity
+
+**Step 6: Estimate search demand**
+
+YouTube doesn't expose search volume directly. We use proxies:
+
+```
+For each topic:
+  Use YouTube's auto-suggest API (free, no quota):
+    GET https://suggestqueries.google.com/complete/search?client=youtube&q={topic}
+    → Returns suggested searches → indicates search interest
+
+  OR use Google Trends unofficial/Keyword Tool API
+
+  OR use vidIQ/TubeBuddy's public keyword data (they scrape this)
+
+  OR use YouTube search result count as a proxy:
+    search.list(q=topic, maxResults=1) → totalResults field → indicates content volume
+```
+
+**Step 7: Generate the opportunity score**
+
+```
+For each topic:
+  demand_score = normalized search interest (0-100)
+  competition_score = normalized saturation (0-100, inverted)
+  engagement_potential = avg_views of top videos on this topic / niche_avg_views
+  trend_score = growth % of uploads on this topic over last 3 months
+
+  opportunity_score = (demand_score × 0.35) +
+                      (competition_score × 0.30) +
+                      (engagement_potential × 0.20) +
+                      (trend_score × 0.15)
+```
+
+**Step 8: Generate video ideas for top opportunities**
+
+For topics with opportunity_score > 70:
+
+```
+Prompt to LLM:
+"Here's a content gap in the tech productivity niche: [topic].
+5 channels cover it with average 50k views per video.
+Search demand is high (YouTube suggests these related searches: [...]).
+Videos in this topic average 12 minutes with 'tutorial' format.
+
+Generate 5 video ideas with:
+- Catchy title (3 variants)
+- Suggested thumbnail concept
+- Script outline (hook + key points + CTA)
+- Recommended tags
+- Estimated video length
+- Why this idea: explain the gap"
+```
+
+**Step 9: Cache and present**
+
+Results are cached in PostgreSQL with a 7-day expiry. When the user visits their dashboard, they see:
+
+```
+Content Gaps for "Tech Productivity" — Updated 2 hours ago
+
+┌─────────────────────────────────────────────────────────────┐
+│ ⭐ TOP OPPORTUNITY                        Score: 91/100     │
+│ "AI Tools for Developers in 2026"                           │
+│ Search demand: HIGH  |  Competition: LOW  |  RPM: $8-12    │
+│ Only 3 creators have made this in the last 3 months.        │
+│ Their average view count: 87K — yours could beat that.     │
+│                                                             │
+│ [Suggested Titles]  [Generate Thumbnails]  [View Outline]   │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│ 📈 GROWING TREND                          Score: 84/100     │
+│ "Cursor AI Tutorial for Beginners"                          │
+│ Search demand: RISING  |  Competition: MEDIUM  |  RPM: $6-9│
+│ Uploads on this topic up 340% in last 3 months.             │
+│ Be one of the first to cover this before it saturates.      │
+│                                                             │
+│ [Suggested Titles]  [Generate Thumbnails]  [View Outline]   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Total API cost per analysis:**
+- YouTube Data API: ~2,000-3,000 units (free quota: 10,000/day)
+- OpenAI API (GPT-4 for 1,000 titles): ~$0.50-1.00 (or $0 with keyword clustering)
+- Total: Essentially free to run, ~$0.50-1.00 if using LLM for topic classification
+
+**Why this works and competitors don't do it:**
+- vidIQ's "Daily Ideas" are generic trending topics, not personalized gap analysis
+- TubeBuddy doesn't do content strategy at all — it's purely optimization
+- Creator OS doesn't do niche analysis
+- No competitor combines: competitor video catalog → topic extraction → saturation analysis → search demand estimation → personalized opportunity scoring → actionable video ideas
+
+### 18.4 How Does the Thumbnail A/B Test Manager Work Technically?
+
+**Step 1: User generates thumbnails**
+
+They input a video title (or select from a content gap suggestion). Our backend calls DALL-E or Replicate (Stable Diffusion) to generate 8-12 thumbnail variants. The prompt includes the user's brand colors, preferred style, and face reference.
+
+**Step 2: User selects 3 variants for testing**
+
+They pick their 3 favorites from the generated batch. We store these in R2 and record the URLs in PostgreSQL.
+
+**Step 3: Upload to YouTube via API**
+
+```
+YouTube Data API → thumbnails.set()
+  videoId: "dQw4w9WgXcQ"
+  media: (binary image data for variant A)
+
+We upload all 3 variants. YouTube's native A/B testing uses
+whatever thumbnails are currently available for the video.
+```
+
+**Note:** YouTube's native A/B test runs automatically when multiple thumbnails are available. There's no separate "start test" API endpoint. YouTube randomly shows different thumbnails to viewers and measures watch time. After a statistically significant sample, YouTube declares a winner.
+
+**Step 4: Poll for results**
+
+```
+Background worker (BullMQ cron job, runs every 4 hours):
+  For each active ThumbnailTest in PostgreSQL:
+    YouTube Analytics API → reports.query()
+      metrics: "estimatedMinutesWatched"
+      dimensions: "video"
+      filters: "video=={videoId}"
+      Compare watch time across the test period
+
+    If confidence > 95% → declare winner → update DB → notify user
+    If test has run >14 days → auto-conclude with best available data
+```
+
+**Step 5: Analyze what made the winner win**
+
+This is our key differentiator. We use vision AI (GPT-4 Vision or Claude) to compare the winning and losing thumbnails:
+
+```
+Prompt to GPT-4 Vision:
+"Here are 3 thumbnails for a YouTube video about [title].
+Variant A had 8.1% CTR (WINNER).
+Variant B had 6.2% CTR.
+Variant C had 4.3% CTR.
+
+Analyze the visual differences and explain why A won.
+Consider: color palette, text size/placement, facial expression,
+composition, contrast, emotion conveyed.
+
+Return JSON with element-by-element breakdown."
+
+LLM returns: {
+  "dominant_color": "A used red (#CC0000) vs B's blue — red CTAs
+   outperform blue 3:1 on tech channels",
+  "text_placement": "A's text in top third vs B's bottom third —
+   visible even in sidebar thumbnails",
+  "face_presence": "A shows your face at 40% of frame with direct
+   eye contact — 2.3x more clicks than no-face thumbnails",
+  "primary_factor": "color_scheme",
+  "recommendation": "Use red accents + face in upper right +
+   3-word text in top third as default template"
+}
+```
+
+**Step 6: Learn over time**
+
+After 10+ tests on a creator's channel, we build a "Thumbnail DNA" profile:
+
+```
+Channel "TechWithSarah" Thumbnail DNA:
+  - Red text: +23% CTR vs other colors
+  - Face on right side: +18% CTR vs center/left
+  - 3-4 word text: +12% CTR vs 5+ words
+  - Blue backgrounds: -15% CTR vs white/dark
+  - Emoji in thumbnail: +8% CTR (specific to this audience)
+
+Applied to future generations → every AI-generated thumbnail
+uses Sarah's winning patterns automatically.
+```
+
+### 18.5 How Does Competitor Tracking Work Technically?
+
+**Setup:**
+User adds a competitor by YouTube channel URL or handle. We resolve it to a channel ID via the YouTube Data API.
+
+**Data collection (background worker, runs daily):**
+
+```
+For each competitor in PostgreSQL:
+  Step 1: Fetch recent videos
+    YouTube Data API → search.list()
+      channelId: competitor.channel_id
+      type: "video"
+      order: "date"
+      maxResults: 50
+      publishedAfter: (last check date)
+
+  Step 2: Fetch video stats (batch call)
+    YouTube Data API → videos.list()
+      id: (comma-separated list of new video IDs)
+      part: "statistics,snippet,contentDetails"
+    → Returns: view count, like count, comment count, publish date,
+      title, description, tags, duration, thumbnail URL
+
+  Step 3: Store in PostgreSQL
+    INSERT INTO competitor_videos (competitor_id, youtube_video_id,
+    title, views, likes, comments, published_at, tags[], duration)
+
+  Step 4: Generate weekly digest (LLM)
+    "This week, {competitor_name} published {count} videos.
+    Best performer: '{title}' with {views} views.
+    Topics covered: [...]
+    Topics they're NOT covering that you could: [...]"
+```
+
+**Cost:** ~10 YouTube API units per competitor per day. 10 competitors × 10 units = 100 units/day. Well within the 10,000 free daily quota.
+
+---
+
+## 19. Updated Phase 1 Tech Stack — With Explanations
+
+| Layer | Technology | Why This Specifically |
+|-------|-----------|----------------------|
+| **Frontend** | Next.js 14+ (App Router) | Server components for fast initial load, API routes for backend logic, one codebase for everything |
+| **Styling** | Tailwind CSS + shadcn/ui | Pre-built accessible components, easy dark mode, consistent design language |
+| **Database** | PostgreSQL (Supabase free tier or Neon) | Relational data with JSON columns for flexible fields like tags[]. Free tier: 500MB — plenty for MVP with 500 users. All structured data goes here — users, channels, videos, tests, gaps, competitors |
+| **File Storage** | Cloudflare R2 | S3-compatible, $0.015/GB/month, NO egress fees (huge deal — AWS S3 charges for bandwidth, R2 doesn't). Stores: AI-generated thumbnails, user face references, generated PDFs |
+| **Auth** | NextAuth.js + Google OAuth | Free. Google OAuth is required for YouTube API access anyway, so we use it for login too |
+| **Cache** | Redis (Upstash free tier) | YouTube API responses are cached for 5-60 minutes depending on data freshness needs. Prevents hitting API quotas on dashboard refresh |
+| **Job Queue** | BullMQ + Redis | Background processing: competitor scraping (daily), A/B test polling (every 4 hours), analytics refresh (hourly), LLM report generation (weekly) |
+| **YouTube APIs** | Data API v3 + Analytics API | Free (10,000 + 1,000,000 units/day). Data API for channel/video/search. Analytics API for CTR/retention/revenue |
+| **AI / LLM** | OpenAI GPT-4o + DALL-E 3 (or Replicate SD) | GPT-4o: ~$2.50/1M input tokens — cheap for the volume we need. DALL-E: ~$0.04/image. Alternative: Replicate SD for thumbnails at $0.002/image |
+| **Image Processing** | Sharp (Node.js library) | Free, server-side. Compositing face reference onto AI backgrounds, resizing to 1280×720, applying text overlays |
+| **Charts** | Tremor or Recharts | Free React charting libraries. Clean, modern look out of the box |
+| **Email** | Resend | Free tier: 100 emails/day. Used for weekly digests, A/B test winner notifications, onboarding |
+| **Payments** | Stripe | Standard: 2.9% + $0.30/transaction. Subscription management, free trial handling, invoicing |
+| **Hosting** | Vercel (frontend) + Railway (workers) | Vercel free tier for small projects, $20/mo Pro after. Railway $5-20/mo for always-on workers |
+
+**Total MVP monthly cost: $30-70**
+- Vercel: $20
+- Railway workers: $10-20
+- Supabase/Neon: $0 (free tier)
+- Upstash Redis: $0 (free tier)
+- Cloudflare R2: $0 (free tier: 10GB)
+- OpenAI API: $0-30 (variable, depends on usage)
+- Resend: $0 (free tier)
+- Total: $30-70/month until you have significant user volume
