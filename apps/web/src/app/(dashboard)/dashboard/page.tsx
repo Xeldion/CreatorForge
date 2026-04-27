@@ -1,5 +1,5 @@
 import { auth } from "@/lib/auth";
-import { prisma } from "@creatorforge/database";
+import { prisma } from "@/lib/prisma";
 import { createYouTubeClient, type VideoData } from "@creatorforge/youtube";
 import { redis } from "@/lib/redis";
 import { StatCard } from "@/components/dashboard/stat-card";

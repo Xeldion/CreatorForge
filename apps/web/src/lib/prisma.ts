@@ -1,15 +1,5 @@
 import { PrismaClient } from "@prisma/client";
 
-/**
- * Singleton Prisma client.
- *
- * Avoids creating multiple PrismaClient instances in development
- * (Next.js hot reload can cause connection pool exhaustion).
- *
- * Usage:
- *   import { prisma } from "@creatorforge/database";
- */
-
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
 };
@@ -17,14 +7,9 @@ const globalForPrisma = globalThis as unknown as {
 export const prisma =
   globalForPrisma.prisma ??
   new PrismaClient({
-    datasources: {
-      db: {
-        url: process.env.DATABASE_URL!,
-      },
-    },
     log:
       process.env.NODE_ENV === "development"
-        ? ["query", "warn", "error"]
+        ? ["warn", "error"]
         : ["warn", "error"],
   });
 
