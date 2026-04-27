@@ -1,0 +1,35 @@
+# ---- Base Node image ----
+FROM node:20-alpine AS base
+RUN apk add --no-cache libc6-compat
+WORKDIR /app
+
+# ---- Dependencies ----
+FROM base AS deps
+COPY package.json package-lock.json* turbo.json ./
+COPY apps/workers/package.json ./apps/workers/
+COPY packages/config/package.json ./packages/config/
+COPY packages/database/package.json ./packages/database/
+COPY packages/youtube/package.json ./packages/youtube/
+COPY packages/ai/package.json ./packages/ai/
+COPY packages/storage/package.json ./packages/storage/
+COPY tooling/typescript/package.json ./tooling/typescript/
+RUN npm ci --workspace=apps/workers --include-workspace-root
+
+# ---- Builder ----
+FROM base AS builder
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+RUN npm run generate -w packages/database
+RUN npm run build -w apps/workers
+
+# ---- Runner ----
+FROM base AS runner
+ENV NODE_ENV=production
+
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/apps/workers/dist ./dist
+COPY --from=builder /app/packages ./packages
+COPY --from=builder /app/package.json ./
+
+# Default: run all workers
+CMD ["node", "dist/runner.js"]

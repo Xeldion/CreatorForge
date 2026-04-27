@@ -1,0 +1,8 @@
+{
+  "extends": "@creatorforge/typescript/worker.json",
+  "compilerOptions": {
+    "outDir": "dist"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules"]
+}

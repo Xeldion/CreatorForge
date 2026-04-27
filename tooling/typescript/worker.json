@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "./base.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@creatorforge/database": ["../../packages/database/src"],
+      "@creatorforge/youtube": ["../../packages/youtube/src"],
+      "@creatorforge/ai": ["../../packages/ai/src"],
+      "@creatorforge/storage": ["../../packages/storage/src"],
+      "@creatorforge/config": ["../../packages/config/src"]
+    }
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules"]
+}

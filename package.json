@@ -1,0 +1,37 @@
+{
+  "name": "creatorforge",
+  "version": "0.0.0",
+  "private": true,
+  "description": "All-in-one command center for YouTube creators — strategy, thumbnails, A/B testing, analytics.",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "tooling/*"
+  ],
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "clean": "turbo run clean",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,css}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,css}\"",
+    "db:generate": "npm run generate -w packages/database",
+    "db:push": "npm run push -w packages/database",
+    "db:migrate": "npm run migrate -w packages/database",
+    "db:studio": "npm run studio -w packages/database",
+    "worker:content-gap": "npm run dev -w apps/workers content-gap",
+    "worker:ab-test": "npm run dev -w apps/workers ab-test",
+    "prepare": "husky || true"
+  },
+  "devDependencies": {
+    "husky": "^9.1.0",
+    "prettier": "^3.4.0",
+    "turbo": "^2.4.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=9.0.0"
+  }
+}

@@ -1,0 +1,224 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearchPostgres"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// User & Auth (NextAuth.js)
+// ============================================================================
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  avatar    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  channels       Channel[]
+  competitors    Competitor[]
+  thumbnailTests ThumbnailTest[]
+  contentGaps    ContentGap[]
+  accounts       Account[]
+  sessions       Session[]
+  onboarding     Onboarding?
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? // Encrypted Google OAuth refresh token
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ============================================================================
+// YouTube Channel
+// ============================================================================
+
+model Channel {
+  id               String   @id @default(cuid())
+  userId           String
+  youtubeChannelId String   @unique
+  channelName      String
+  thumbnailUrl     String?
+  subscriberCount  Int      @default(0)
+  totalViews       Int      @default(0)
+  totalVideos      Int      @default(0)
+  nicheCategory    String?
+  brandColors      Json     @default("[\"#3B82F6\", \"#10B981\"]") // [primary, accent]
+  brandFont        String   @default("Inter")
+  faceReferenceUrl String?
+  statsUpdatedAt   DateTime @default(now())
+  createdAt        DateTime @default(now())
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  videos Video[]
+
+  @@index([userId])
+}
+
+model Video {
+  id              String   @id @default(cuid())
+  channelId       String
+  youtubeVideoId  String   @unique
+  title           String
+  thumbnailUrl    String?
+  publishedAt     DateTime
+  views           Int      @default(0)
+  likes           Int      @default(0)
+  comments        Int      @default(0)
+  ctr             Float?
+  avgRetention    Float?
+  tags            Json     @default("[]")
+  category        String?
+  durationSeconds Int?
+  seoScore        Int?
+  syncedAt        DateTime @default(now())
+  createdAt       DateTime @default(now())
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@index([channelId])
+  @@index([publishedAt])
+}
+
+// ============================================================================
+// Competitor Tracking
+// ============================================================================
+
+model Competitor {
+  id                String   @id @default(cuid())
+  userId            String
+  youtubeChannelId  String
+  channelName       String
+  thumbnailUrl      String?
+  subscriberCount   Int      @default(0)
+  nicheOverlapScore Int?
+  addedAt           DateTime @default(now())
+
+  user   User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  videos CompetitorVideo[]
+
+  @@unique([userId, youtubeChannelId])
+  @@index([userId])
+}
+
+model CompetitorVideo {
+  id            String   @id @default(cuid())
+  competitorId  String
+  youtubeVideoId String
+  title         String
+  thumbnailUrl  String?
+  publishedAt   DateTime
+  views         Int      @default(0)
+  likes         Int      @default(0)
+  comments      Int      @default(0)
+  tags          Json     @default("[]")
+  syncedAt      DateTime @default(now())
+
+  competitor Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+
+  @@unique([competitorId, youtubeVideoId])
+  @@index([competitorId])
+  @@index([publishedAt])
+}
+
+// ============================================================================
+// Thumbnail A/B Testing
+// ============================================================================
+
+model ThumbnailTest {
+  id              String    @id @default(cuid())
+  videoId         String
+  userId          String
+  variantAUrl     String
+  variantBUrl     String
+  variantCUrl     String?
+  testStartedAt   DateTime?
+  testEndedAt     DateTime?
+  winnerVariant   String?   // "A", "B", or "C"
+  confidenceLevel Float?
+  ctrA            Float?
+  ctrB            Float?
+  ctrC            Float?
+  winAnalysis     Json?     // GPT-4 Vision element-by-element breakdown
+  createdAt       DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([videoId])
+  @@index([testEndedAt])
+}
+
+// ============================================================================
+// Content Gap Analysis
+// ============================================================================
+
+model ContentGap {
+  id                   String   @id @default(cuid())
+  userId               String
+  niche                String
+  topic                String
+  searchVolumeEstimate String?
+  competitionScore     Int?
+  suggestedTitle       String?
+  suggestedTitles      Json     @default("[]")   // 3 title variants
+  suggestedTags        Json     @default("[]")
+  scriptOutline        String?                   // hook + key points + CTA
+  thumbnailConcept     String?
+  opportunityScore     Int      @default(0)
+  estimatedRpm         String?
+  generatedAt          DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, niche])
+  @@index([generatedAt])
+}
+
+// ============================================================================
+// Onboarding Progress
+// ============================================================================
+
+model Onboarding {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  nicheSelected Boolean  @default(false)
+  competitorsAdded Boolean @default(false)
+  brandSet      Boolean  @default(false)
+  completed     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}

@@ -1,0 +1,26 @@
+{
+  "name": "@creatorforge/workers",
+  "version": "0.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "scripts": {
+    "dev": "tsx src/runner.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@creatorforge/ai": "*",
+    "@creatorforge/config": "*",
+    "@creatorforge/database": "*",
+    "@creatorforge/storage": "*",
+    "@creatorforge/youtube": "*",
+    "bullmq": "^5.34.0",
+    "ioredis": "^5.4.0"
+  },
+  "devDependencies": {
+    "@creatorforge/typescript": "*",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

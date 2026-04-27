@@ -1,0 +1,21 @@
+{
+  "name": "@creatorforge/ai",
+  "version": "0.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "openai": "^4.77.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@creatorforge/config": "*",
+    "@creatorforge/typescript": "*",
+    "typescript": "^5.7.0"
+  }
+}
