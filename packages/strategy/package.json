@@ -1,0 +1,23 @@
+{
+  "name": "@creatorforge/strategy",
+  "version": "0.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@creatorforge/ai": "*",
+    "@creatorforge/database": "*",
+    "@creatorforge/youtube": "*",
+    "google-trends-api": "^4.9.2",
+    "googleapis": "^140.0.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@creatorforge/typescript": "*",
+    "typescript": "^5.7.0"
+  }
+}

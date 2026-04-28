@@ -3,7 +3,7 @@
 > **What this is:** A complete reference for the project structure, conventions, and setup.
 > If something isn't obvious from reading the code, it should be documented here.
 >
-> **Last updated:** April 27, 2026
+> **Last updated:** April 28, 2026
 > **Initial commit:** `49833f1`
 
 ---
@@ -74,6 +74,11 @@ creatorforge/
 │   │   └── src/index.ts        # PrismaClient singleton
 │   ├── storage/                # Cloudflare R2 client
 │   │   └── src/index.ts        # uploadFile(), uploadThumbnail(), etc.
+│   ├── strategy/               # Content gap analyzer pipeline
+│   │   └── src/
+│   │       ├── index.ts        # Main pipeline (7 steps)
+│   │       ├── analytics.ts    # Deterministic scoring engine
+│   │       └── demand.ts       # Demand estimation (autocomplete + Trends)
 │   └── youtube/                # YouTube Data API v3 client
 │       └── src/index.ts        # createYouTubeClient() + types
 │
@@ -106,7 +111,8 @@ creatorforge/
 | Package | Purpose | Dependencies |
 |---------|---------|-------------|
 | `@creatorforge/web` | Next.js app (frontend + API routes) | All other packages |
-| `@creatorforge/workers` | BullMQ background workers | ai, config, database, storage, youtube |
+| `@creatorforge/workers` | BullMQ background workers | ai, config, database, storage, youtube, strategy |
+| `@creatorforge/strategy` | Content gap analyzer pipeline + scoring engine | ai, database, youtube |
 | `@creatorforge/ai` | OpenAI/LLM utilities | config |
 | `@creatorforge/config` | Env validation (Zod) | None |
 | `@creatorforge/database` | Prisma ORM | None (peer: Prisma) |
@@ -264,6 +270,8 @@ All variables are defined in `.env.example` and validated by `@creatorforge/conf
 
 | Variable | Needed for |
 |----------|-----------|
+| `DEVELOPMENT_MODE` | Skip YouTube API, use mock channels/videos |
+| `CONTENT_GAP_REAL_DEMAND` | Use real autocomplete + Trends even with mock data (requires DEVELOPMENT_MODE=true) |
 | `R2_*` | Thumbnail storage (Step 3) |
 | `REPLICATE_API_TOKEN` | Thumbnail generation (Step 3) |
 | `RESEND_API_KEY` | Email notifications (Step 4) |

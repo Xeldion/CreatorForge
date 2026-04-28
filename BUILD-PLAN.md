@@ -3,8 +3,8 @@
 > **This is the execution guide.** VISION.md is the *what* and *why*. This document is the *how* and *when*.
 > Each step is a shippable checkpoint. Don't move to the next step until the current one is demonstrable.
 >
-> **Last updated:** April 27, 2026
-> **Status:** Pre-build — Scaffolding
+> **Last updated:** April 28, 2026
+> **Status:** Step 2 — Content Gap Analyzer: Core complete, scoring refined, real demand enabled
 > **Target completion:** 8 weeks (solo developer, realistic pace)
 
 ---
@@ -649,7 +649,7 @@ Create `src/lib/content-gap.ts` following the 9-step process from VISION.md Sect
 
 Key implementation notes:
 
-**Step 2 (discover channels):** Use `youtube.search.list()` with `type: "channel"`. Filter to channels with 1,000-500,000 subscribers. Limit to top 20 channels to stay within quota.
+**Step 2 (discover channels):** Use `youtube.search.list()` with `type: "channel"`. All channel sizes included — micro-creators (<1k) capture emerging trends, large creators (>500k) show market saturation. The deterministic scoring engine uses log(subscriberCount) internally so extremes don't distort scores. Limit to top 8 channels to stay within quota.
 
 **Step 3 (fetch videos):** For each of the top 20 channels, fetch their 50 most recent videos (last 6 months). This costs ~2,000 API units. Cache per-niche results for 7 days in PostgreSQL.
 
@@ -713,12 +713,12 @@ Build the page at `src/app/(dashboard)/dashboard/strategy/page.tsx`:
 
 ### 4.5 Step 2 Checkpoint
 
-- [ ] User types a niche → background job runs → results appear in ~45 seconds
-- [ ] Results show 5-15 content gaps with opportunity scores
-- [ ] Each gap has clickable title variants, script outlines, and tags
-- [ ] Running the same niche twice within 7 days returns cached results (instant)
-- [ ] Rate limiting works (can't spam the analyzer)
-- [ ] OpenAI costs are tracked and visible in logs
+- [x] User types a niche → background job runs → results appear in ~45 seconds
+- [x] Results show 5-15 content gaps with opportunity scores
+- [x] Each gap has clickable title variants, script outlines, and tags
+- [x] Running the same niche twice within 7 days returns cached results (instant)
+- [x] Rate limiting works (can't spam the analyzer) — disabled for dev
+- [x] OpenAI costs are tracked and visible in logs
 
 **STOP HERE.** Show this to a real creator. Ask: "Would you pay $19/month for this?" Their answer tells you whether to continue.
 
@@ -999,6 +999,12 @@ Record significant decisions here as they happen. This prevents re-litigating th
 | 2026-04-27 | Tremor over Recharts for charts | Cleaner default look, less custom styling needed |
 | 2026-04-27 | BullMQ over Inngest for job queue | BullMQ is free + Redis; Inngest has usage limits on free tier |
 | 2026-04-27 | Build content gap analyzer BEFORE A/B testing | Riskier assumption — validates if creators want data-driven strategy |
+| 2026-04-28 | Propagate videoId through LLM classification | Title-based joins silently drop videos when LLM normalizes titles. videoId is stable, title is not. |
+| 2026-04-28 | Recency-weighted effective video count in scoring | Old videos (60+ days) shouldn't make a topic look oversupplied. Use exponential decay: 2^(-ageDays/60). |
+| 2026-04-28 | Remove subscriber range filter from channel discovery | Micro-creators surface emerging trends. Large creators indicate saturation. log(subCount) in scoring handles extremes. |
+| 2026-04-28 | Bucket numeric scores as tiers before LLM prompt | Passing exact numbers (82/100, 75/100) biases LLM copy generation. Use TOP_10%/HIGH/MID/LOW instead. |
+| 2026-04-28 | CONTENT_GAP_REAL_DEMAND enabled in DEV | Real YouTube autocomplete + Google Trends now used even with mock channels/videos. Env var was mis-formatted (escaped quotes). |
+| 2026-04-28 | Fix niche-specific gaps API endpoint | /api/strategy/gaps returned globally most-recent niche, not the requested one. Added ?niche= param with case-insensitive fallback. |
 | 2026-04-27 | Landing page LAST, not first | Product is the pitch. No traffic to market to until product exists |
 
 ---

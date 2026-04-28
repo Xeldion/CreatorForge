@@ -13,19 +13,21 @@
  * In production, each worker runs as a separate Railway/container instance.
  */
 
+import { config } from "dotenv";
+config({ path: ".env.local" });
 import { Worker } from "bullmq";
-import { redis } from "./redis.js";
-import { contentGapProcessor } from "./workers/content-gap.js";
-import { abTestProcessor } from "./workers/ab-test.js";
-
-const WORKERS = {
-  "content-gap": contentGapProcessor,
-  "ab-test": abTestProcessor,
-} as const;
-
-type WorkerName = keyof typeof WORKERS;
 
 async function main() {
+  const { contentGapProcessor } = await import("./workers/content-gap.js");
+  const { abTestProcessor } = await import("./workers/ab-test.js");
+
+  const WORKERS = {
+    "content-gap": contentGapProcessor,
+    "ab-test": abTestProcessor,
+  } as const;
+
+  type WorkerName = keyof typeof WORKERS;
+
   const targetWorker = process.argv[2] as WorkerName | undefined;
 
   if (targetWorker && !(targetWorker in WORKERS)) {
@@ -44,8 +46,11 @@ async function main() {
 
   for (const name of workersToStart) {
     const worker = new Worker(name, WORKERS[name]!, {
-      connection: redis,
-      concurrency: name === "content-gap" ? 1 : 3, // Content gap is heavy, run one at a time
+      connection: {
+        url: process.env.REDIS_URL!,
+        tls: {},
+      },
+      concurrency: name === "content-gap" ? 1 : 3,
     });
 
     worker.on("completed", (job) => {

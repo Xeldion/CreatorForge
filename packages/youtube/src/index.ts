@@ -62,6 +62,9 @@ function createOAuth2Client(refreshToken: string) {
 // YouTube Client Implementation
 // ============================================================================
 
+// Cache uploads playlist IDs to avoid re-fetching per channel
+const playlistIdCache = new Map<string, string>();
+
 export function createYouTubeClient(refreshToken: string): YouTubeClient {
   const auth = createOAuth2Client(refreshToken);
   const yt = google.youtube({ version: "v3", auth });
@@ -162,21 +165,55 @@ export function createYouTubeClient(refreshToken: string): YouTubeClient {
     },
 
     async getChannelVideos(channelId: string, maxResults = 50) {
-      const res = await yt.search.list({
-        part: ["snippet"],
-        channelId,
-        type: ["video"],
-        order: "date",
-        maxResults,
-        publishedAfter: new Date(
-          Date.now() - 180 * 24 * 60 * 60 * 1000
-        ).toISOString(), // Last 6 months
-      });
+      // Use cached uploads playlist ID if available (saves 1 unit per call)
+      let uploadsPlaylistId = playlistIdCache.get(channelId);
 
-      const videoIds =
-        res.data.items?.map((item) => item.id?.videoId).filter(Boolean) ?? [];
+      if (!uploadsPlaylistId) {
+        const channelRes = await yt.channels.list({
+          part: ["contentDetails"],
+          id: [channelId],
+        });
 
-      return this.getVideoStats(videoIds as string[]);
+        uploadsPlaylistId =
+          channelRes.data.items?.[0]?.contentDetails?.relatedPlaylists?.uploads;
+        if (!uploadsPlaylistId) return [];
+
+        playlistIdCache.set(channelId, uploadsPlaylistId);
+      }
+
+      // Fetch video IDs from the uploads playlist (1 unit per page)
+      // Need ~2 pages for 50 videos, filter by date to last 6 months
+      const sixMonthsAgo = new Date(
+        Date.now() - 180 * 24 * 60 * 60 * 1000
+      ).toISOString();
+
+      const videoIds: string[] = [];
+      let pageToken: string | undefined;
+
+      while (videoIds.length < maxResults) {
+        const playlistRes = await yt.playlistItems.list({
+          part: ["snippet", "contentDetails"],
+          playlistId: uploadsPlaylistId,
+          maxResults: 50,
+          pageToken,
+        });
+
+        const items = playlistRes.data.items ?? [];
+        for (const item of items) {
+          const publishedAt = item.snippet?.publishedAt;
+          // Only include videos from last 6 months
+          if (publishedAt && publishedAt >= sixMonthsAgo) {
+            const vid = item.contentDetails?.videoId;
+            if (vid) videoIds.push(vid);
+          }
+          if (videoIds.length >= maxResults) break;
+        }
+
+        pageToken = playlistRes.data.nextPageToken ?? undefined;
+        if (!pageToken) break; // No more pages
+      }
+
+      return this.getVideoStats(videoIds.slice(0, maxResults));
     },
 
     async uploadThumbnail(videoId: string, imageBuffer: Buffer) {

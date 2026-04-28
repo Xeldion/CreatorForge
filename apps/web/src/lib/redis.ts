@@ -9,10 +9,11 @@ export const redis =
   new Redis(process.env.REDIS_URL!, {
     maxRetriesPerRequest: 3,
     retryStrategy(times) {
-      if (times > 3) return null; // Stop retrying after 3 attempts
+      if (times > 3) return null;
       return Math.min(times * 200, 2000);
     },
     lazyConnect: true,
+    tls: {}, // Upstash requires TLS
   });
 
 if (process.env.NODE_ENV !== "production") {
